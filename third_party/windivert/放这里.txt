@@ -1,0 +1,8 @@
+打包脚本优先用这个目录里的官方文件（.gitignore 不收 dll/sys，所以不会进 git）：
+
+  WinDivert.dll
+  WinDivert64.sys
+
+要的是 WinDivert 2.2.2 的 x64 版（官方签名）。
+没有这两份时，旁边的 pack-selfbuild.ps1 会去下载官方 zip；
+Defender 若把 zip 隔离，就把已经在跑的那份拷到这里再双击「打包自编译.cmd」。

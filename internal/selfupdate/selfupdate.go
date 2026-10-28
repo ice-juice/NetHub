@@ -17,6 +17,8 @@ package selfupdate
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,11 +44,12 @@ const (
 
 // Pending 待完成的更新。写入后即使进程被杀，下次启动也能接着做完。
 type Pending struct {
-	Version    string   `json:"version"`     // 目标版本（日志用）
-	Files      []string `json:"files"`       // 需要替换的文件（相对程序目录）
-	StartedAt  string   `json:"started_at"`  // 什么时候开始的（人看）
-	OldPID     int      `json:"old_pid"`     // 旧进程 PID：新进程要等它退出
-	ExeSwapped bool     `json:"exe_swapped"` // nethub.exe 是否已经换过了
+	Version    string            `json:"version"`     // 目标版本（日志用）
+	Files      []string          `json:"files"`       // 需要替换的文件（相对程序目录）
+	StartedAt  string            `json:"started_at"`  // 什么时候开始的（人看）
+	OldPID     int               `json:"old_pid"`     // 旧进程 PID：新进程要等它退出
+	ExeSwapped bool              `json:"exe_swapped"` // nethub.exe 是否已经换过了
+	Hashes     map[string]string `json:"hashes"`      // 文件名 → SHA256 hex；写入前复验，缺了就拒绝
 }
 
 // Stage 把 zip 里白名单内的文件解到 <progDir>/update/，并写下 pending.json。
@@ -63,6 +66,7 @@ func Stage(zipPath, progDir, version string, oldPID int) (Pending, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return p, err
 	}
+	p.Hashes = make(map[string]string)
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
@@ -87,6 +91,7 @@ func Stage(zipPath, progDir, version string, oldPID int) (Pending, error) {
 			return p, err
 		}
 		p.Files = append(p.Files, name)
+		p.Hashes[name] = sha256hex(raw)
 	}
 	if len(p.Files) == 0 {
 		return p, fmt.Errorf("更新包里没有需要的文件（期望至少有 nethub.exe）")
@@ -122,31 +127,32 @@ func looksLikePE(b []byte) bool {
 
 // SwapRunningExe 把正在运行的 exe 换成新的（改名旧文件 → 写新文件）。
 // 这一步可以现在做：改名运行中的 exe 是允许的；新文件直接写成 nethub.exe。
+// 写之前复算暂存 exe 的 SHA256，对不上或旧 pending 没摘要：不改名、不写入。
 func SwapRunningExe(progDir string) error {
 	newExe := filepath.Join(progDir, StageDirName, "nethub.exe")
 	curExe := filepath.Join(progDir, "nethub.exe")
-	if _, err := os.Stat(newExe); err != nil {
+	raw, err := os.ReadFile(newExe)
+	if err != nil {
 		return fmt.Errorf("暂存的新版本不存在: %w", err)
+	}
+	p, ok := HasPending(progDir)
+	if !ok {
+		return fmt.Errorf("没有待完成的更新，拒绝替换程序")
+	}
+	if err := verifyStagedHash(p, "nethub.exe", raw); err != nil {
+		return err
 	}
 	_ = os.Remove(curExe + OldSuffix) // 上一轮留下的
 	if err := os.Rename(curExe, curExe+OldSuffix); err != nil {
 		return fmt.Errorf("旧版本改名失败（可能被别的程序占用）: %w", err)
-	}
-	raw, err := os.ReadFile(newExe)
-	if err != nil {
-		// 改名成功但读不到新的：把旧的换回来，别让程序消失
-		_ = os.Rename(curExe+OldSuffix, curExe)
-		return err
 	}
 	if err := os.WriteFile(curExe, raw, 0o755); err != nil {
 		_ = os.Rename(curExe+OldSuffix, curExe)
 		return fmt.Errorf("写入新版本失败: %w", err)
 	}
 	// 标记 exe 已换（重启后收尾时不用再动它）
-	if p, ok := HasPending(progDir); ok {
-		p.ExeSwapped = true
-		_ = writePending(progDir, p)
-	}
+	p.ExeSwapped = true
+	_ = writePending(progDir, p)
 	return nil
 }
 
@@ -197,21 +203,32 @@ func ApplyPending(progDir string, waitFor func(pid int, max time.Duration) bool)
 		}
 		need++
 	}
+	// 写入前先复验每个要落盘的文件。旧 pending 没摘要、或暂存被改过：一个都不写。
+	if len(p.Hashes) == 0 {
+		return nil, fmt.Errorf("暂存更新没有完整性摘要（旧版 pending？请重新下载并更新）")
+	}
+	verified := make(map[string][]byte, need)
+	for _, name := range p.Files {
+		if name == "nethub.exe" && p.ExeSwapped {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(stageDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("读暂存文件 %s 失败: %w", name, err)
+		}
+		if err := verifyStagedHash(p, name, raw); err != nil {
+			return nil, err
+		}
+		verified[name] = raw
+	}
 	var done []string
 	var firstErr error
 	for _, name := range p.Files {
 		if name == "nethub.exe" && p.ExeSwapped {
 			continue // 运行前就换过了，这里的还是旧进程的副本
 		}
-		src := filepath.Join(stageDir, name)
 		dst := filepath.Join(progDir, name)
-		raw, err := os.ReadFile(src)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("读暂存文件 %s 失败: %w", name, err)
-			}
-			continue
-		}
+		raw := verified[name]
 		// 旧文件改名让路（加载中的文件通常删不掉、但改名一般可以；失败就重试几次）
 		if _, err := os.Stat(dst); err == nil {
 			_ = os.Remove(dst + OldSuffix)
@@ -288,6 +305,28 @@ func CleanupStale(progDir string) {
 	for _, e := range ents {
 		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 	}
+}
+
+func sha256hex(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// verifyStagedHash 复算暂存字节并与 pending 里记下的摘要比对。
+// 缺摘要或对不上：返回错误，调用方不得写入（fail-closed）。
+func verifyStagedHash(p Pending, name string, raw []byte) error {
+	if len(p.Hashes) == 0 {
+		return fmt.Errorf("暂存更新没有完整性摘要（旧版 pending？请重新下载并更新）")
+	}
+	want, ok := p.Hashes[name]
+	if !ok || want == "" {
+		return fmt.Errorf("暂存文件 %s 没有完整性摘要（请重新下载并更新）", name)
+	}
+	got := sha256hex(raw)
+	if got != want {
+		return fmt.Errorf("暂存文件 %s 已被改动（摘要对不上），拒绝写入", name)
+	}
+	return nil
 }
 
 func retry(n int, gap time.Duration, fn func() error) error {

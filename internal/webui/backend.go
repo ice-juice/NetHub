@@ -2674,8 +2674,8 @@ type AboutView struct {
 }
 
 const (
-	repoURL     = "https://github.com/Lithivm/NetHub"
-	releasesURL = "https://github.com/Lithivm/NetHub/releases"
+	repoURL     = "https://github.com/" + repoOwnerRepo
+	releasesURL = repoURL + "/releases"
 )
 
 // GetAbout 版本与项目地址（界面「关于」卡用）。

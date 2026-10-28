@@ -12,11 +12,11 @@ import (
 
 func TestLatestTagViaRedirect(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/Lithivm/NetHub/releases/tag/v0.7.0", http.StatusFound)
+		http.Redirect(w, r, "/ice-juice/NetHub/releases/tag/v0.7.0", http.StatusFound)
 	}))
 	defer srv.Close()
 	restore := releasesLatestURL
-	releasesLatestURL = srv.URL + "/Lithivm/NetHub/releases/latest"
+	releasesLatestURL = srv.URL + "/ice-juice/NetHub/releases/latest"
 	defer func() { releasesLatestURL = restore }()
 
 	tag, err := latestTagViaRedirect()
@@ -36,7 +36,7 @@ func TestLatestTagViaRedirectNoRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 	restore := releasesLatestURL
-	releasesLatestURL = srv.URL + "/Lithivm/NetHub/releases/latest"
+	releasesLatestURL = srv.URL + "/ice-juice/NetHub/releases/latest"
 	defer func() { releasesLatestURL = restore }()
 
 	if tag, err := latestTagViaRedirect(); err == nil {
@@ -52,7 +52,7 @@ const assetsHTMLFixture = `<div class="Box">
   <li class="Box-row d-flex">
    <span>
     <svg class="octicon"></svg>
-    <a href="/Lithivm/NetHub/releases/download/v0.7.0/NetHub.zip" rel="nofollow" class="wb-break-all">
+    <a href="/ice-juice/NetHub/releases/download/v0.7.0/NetHub.zip" rel="nofollow" class="wb-break-all">
       <span class="text-bold">NetHub.zip</span>
     </a>
    </span>
@@ -65,7 +65,7 @@ const assetsHTMLFixture = `<div class="Box">
   </li>
   <li class="Box-row d-flex">
    <span>
-    <a href="/Lithivm/NetHub/releases/download/v0.7.0/NetHub.zip.sha256" rel="nofollow">
+    <a href="/ice-juice/NetHub/releases/download/v0.7.0/NetHub.zip.sha256" rel="nofollow">
       <span class="text-bold">NetHub.zip.sha256</span>
     </a>
    </span>
@@ -77,7 +77,7 @@ const assetsHTMLFixture = `<div class="Box">
   </li>
   <li class="Box-row d-flex">
    <span>
-    <a href="/Lithivm/NetHub/releases/download/v0.7.0/Source.tar.gz" rel="nofollow">
+    <a href="/ice-juice/NetHub/releases/download/v0.7.0/Source.tar.gz" rel="nofollow">
       <span class="text-bold">Source.tar.gz</span>
     </a>
    </span>
@@ -102,7 +102,7 @@ func TestAssetsViaHTML(t *testing.T) {
 	}))
 	defer srv.Close()
 	restore := releasesAssetsURL
-	releasesAssetsURL = srv.URL + "/Lithivm/NetHub/releases/expanded_assets/"
+	releasesAssetsURL = srv.URL + "/ice-juice/NetHub/releases/expanded_assets/"
 	defer func() { releasesAssetsURL = restore }()
 
 	assets, err := assetsViaHTML("v0.7.0")
@@ -117,8 +117,8 @@ func TestAssetsViaHTML(t *testing.T) {
 	if a.Name != "NetHub.zip" {
 		t.Fatalf("包名 = %q", a.Name)
 	}
-	if a.URL != srv.URL+"/Lithivm/NetHub/releases/download/v0.7.0/NetHub.zip" &&
-		!strings.HasSuffix(a.URL, "/Lithivm/NetHub/releases/download/v0.7.0/NetHub.zip") {
+	if a.URL != srv.URL+"/ice-juice/NetHub/releases/download/v0.7.0/NetHub.zip" &&
+		!strings.HasSuffix(a.URL, "/ice-juice/NetHub/releases/download/v0.7.0/NetHub.zip") {
 		t.Fatalf("下载地址 = %q", a.URL)
 	}
 	const want = "5121d6abc3b3b47781c90979ee62a9faa5dc9c7a94a056c64b289f6d4fd29791"
@@ -143,7 +143,7 @@ func TestAssetsViaHTMLNoZIP(t *testing.T) {
 
 func TestReleaseDownloadURL(t *testing.T) {
 	got := releaseDownloadURL("v0.7.0", "NetHub.zip")
-	want := "https://github.com/Lithivm/NetHub/releases/download/v0.7.0/NetHub.zip"
+	want := "https://github.com/ice-juice/NetHub/releases/download/v0.7.0/NetHub.zip"
 	if got != want {
 		t.Fatalf("拼出来的地址是 %q，想要 %q", got, want)
 	}

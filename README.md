@@ -50,7 +50,7 @@
 
 ## 安装
 
-到 [Releases](https://github.com/Lithivm/NetHub/releases) 下载 `NetHub.zip`，解压到任意目录：
+到 [Releases](https://github.com/ice-juice/NetHub/releases) 下载 `NetHub.zip`，解压到任意目录：
 
 1. **先让安全软件放行驱动** —— 火绒 / 360 / 腾讯管家默认会拦 `WinDivert64.sys`，两个文件要分别放行：
    - `nethub.exe` → 杀软的**信任区**（免得主程序被当木马删掉）
@@ -68,6 +68,16 @@
    （别忘了给本机网段加一条「直连」规则，规则页有「填本机网段」按钮）
 
 需要 Windows 10 / 11 x64 + 管理员权限。
+
+## 在目标电脑上自己编译
+
+适合不想把编好的 exe 拷过去的机器：在那台电脑上现编，文件没有「从网上下来」的标记。目标电脑不用装 Go，编译时也不再上网。
+
+在能上网的电脑上，双击 `third_party\打包自编译.cmd`。源码、依赖和 Go 会收进这个文件夹：`src\`、`toolchain\`、`windivert\`。
+
+把整个 `third_party` 文件夹拷到目标电脑，双击里面的 `一键编译.cmd`。编译只读这几个相对路径，程序在 `out\nethub.exe`。驱动仍要按上面第 1 步放行。
+
+Defender 常把 WinDivert 官方 zip 隔离。这时把已经在用的 `WinDivert.dll` 和 `WinDivert64.sys` 放到 `third_party\windivert\`，再双击一次打包。
 
 ## 命令行 / 无界面
 

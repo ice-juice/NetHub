@@ -3841,9 +3841,13 @@ async function loadAbout() {
   if (!v) return;
   setText('aboutGo', v.goVersion || '-');
   setText('aboutVersion', v.version === 'dev' ? 'dev' : v.version);
-  state.repo = v.repo || 'https://github.com/Lithivm/NetHub';
+  state.repo = v.repo || 'https://github.com/ice-juice/NetHub';
   const link = document.getElementById('repoLink');
-  if (link) link.href = state.repo;
+  if (link) {
+    link.href = state.repo;
+    const label = link.querySelector('span');
+    if (label) label.textContent = state.repo.replace(/^https?:\/\//, '');
+  }
 }
 
 /* 关于卡：同一个按钮两种状态 —— 没新版时是「检查更新」，查到新版就变成「下载并更新」。

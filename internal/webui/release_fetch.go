@@ -29,7 +29,7 @@ import (
 	"time"
 )
 
-const repoOwnerRepo = "Lithivm/NetHub"
+const repoOwnerRepo = "ice-juice/NetHub"
 
 // 这两个地址在测试里会被换成本地 httptest 服务，所以用变量。
 var (

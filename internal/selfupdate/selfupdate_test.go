@@ -65,6 +65,18 @@ func TestStageSwapApply(t *testing.T) {
 	if len(p.Files) != 3 {
 		t.Fatalf("白名单过滤不对，应只取 3 个文件：%v", p.Files)
 	}
+	if len(p.Hashes) != 3 {
+		t.Fatalf("Stage 应记下每个白名单文件的摘要：%v", p.Hashes)
+	}
+	for _, name := range p.Files {
+		raw, err := os.ReadFile(filepath.Join(prog, StageDirName, name))
+		if err != nil {
+			t.Fatalf("读暂存 %s: %v", name, err)
+		}
+		if p.Hashes[name] != sha256hex(raw) {
+			t.Errorf("%s 摘要对不上：pending=%s 文件=%s", name, p.Hashes[name], sha256hex(raw))
+		}
+	}
 	if _, err := os.Stat(filepath.Join(prog, StageDirName, "config.yaml")); !os.IsNotExist(err) {
 		t.Fatal("更新包里的 config.yaml 不该被解出来")
 	}
@@ -153,5 +165,71 @@ func TestStageRejectsBadPackages(t *testing.T) {
 	f2.Close()
 	if _, err := Stage(p2, prog, "v1", 0); err == nil {
 		t.Error("nethub.exe 不是 PE 的包应该被拒绝")
+	}
+}
+
+// 暂存驱动被改过：收尾必须拒绝，程序目录里的驱动不能被动。
+func TestApplyPendingRejectsTamperedSys(t *testing.T) {
+	prog := t.TempDir()
+	write := func(name, data string) {
+		if err := os.WriteFile(filepath.Join(prog, name), []byte(data), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("nethub.exe", "old-exe")
+	write("WinDivert.dll", "old-dll")
+	write("WinDivert64.sys", "old-sys")
+
+	zp := makeZip(t, t.TempDir())
+	if _, err := Stage(zp, prog, "v9.9.9", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prog, StageDirName, "WinDivert64.sys"), []byte("tampered-sys"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	done, err := ApplyPending(prog, func(int, time.Duration) bool { return true })
+	if err == nil {
+		t.Fatal("篡改过的暂存驱动应收尾失败")
+	}
+	if len(done) != 0 {
+		t.Errorf("对不上摘要时一个文件都不该写：%v", done)
+	}
+	if got, _ := os.ReadFile(filepath.Join(prog, "WinDivert64.sys")); string(got) != "old-sys" {
+		t.Errorf("程序目录驱动不该被动：%q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(prog, "WinDivert.dll")); string(got) != "old-dll" {
+		t.Errorf("程序目录 DLL 也不该被动：%q", got)
+	}
+	if _, ok := HasPending(prog); !ok {
+		t.Error("失败应收下 pending，方便重新下载")
+	}
+}
+
+// 暂存 exe 被改过：换 exe 必须拒绝，当前程序不能被动。
+func TestSwapRunningExeRejectsTamperedExe(t *testing.T) {
+	prog := t.TempDir()
+	if err := os.WriteFile(filepath.Join(prog, "nethub.exe"), []byte("old-exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	zp := makeZip(t, t.TempDir())
+	if _, err := Stage(zp, prog, "v9.9.9", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prog, StageDirName, "nethub.exe"), []byte("tampered-exe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SwapRunningExe(prog); err == nil {
+		t.Fatal("篡改过的暂存 exe 应拒绝替换")
+	}
+	if got, _ := os.ReadFile(filepath.Join(prog, "nethub.exe")); string(got) != "old-exe" {
+		t.Errorf("当前 exe 不该被动：%q", got)
+	}
+	if _, err := os.Stat(filepath.Join(prog, "nethub.exe"+OldSuffix)); !os.IsNotExist(err) {
+		t.Error("失败时不该把当前 exe 改名成 .old")
+	}
+	if _, ok := HasPending(prog); !ok {
+		t.Error("失败应收下 pending，方便重新下载")
 	}
 }

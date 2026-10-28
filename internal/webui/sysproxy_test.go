@@ -120,7 +120,7 @@ func TestSystemProxyLive(t *testing.T) {
 	if pf == nil {
 		t.Fatal("本机开着系统代理，systemProxyFunc 却返回 nil —— 更新请求会直连，等于一键更新不可用")
 	}
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/Lithivm/NetHub/releases/latest", nil)
+	req, _ := http.NewRequest("GET", "https://api.github.com/repos/ice-juice/NetHub/releases/latest", nil)
 	got, err := pf(req)
 	if err != nil || got == nil {
 		t.Fatalf("github.com 没被交给系统代理：url=%v err=%v", got, err)

@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,31 +204,154 @@ func ensurePathInFile(raw []byte, _ string) []byte {
 // 刻意只做"手动触发"：自动轮询会引入"谁在什么时候把什么推到我机器上"的问题，
 // 现场排障时最怕这种说不清的变化。要集中管理就先发个链接，让人点一下。
 func (b *Backend) ImportConfigFromURL(rawURL string) (string, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return "", fmt.Errorf("请填配置地址（http/https）")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return "", fmt.Errorf("只支持 http/https 地址")
-	}
-	body, err := httpGet(rawURL)
+	u, err := parseImportURL(rawURL)
 	if err != nil {
 		return "", err
 	}
-	if _, err := b.importConfigFromRaw(rawURL, body); err != nil {
+	body, err := httpGet(u.String())
+	if err != nil {
+		return "", err
+	}
+	if _, err := b.importConfigFromRaw(u.String(), body); err != nil {
 		return "", err
 	}
 	if err := b.a.Restart(); err != nil {
-		return rawURL, fmt.Errorf("配置已导入，但重启服务失败：%w", err)
+		return u.String(), fmt.Errorf("配置已导入，但重启服务失败：%w", err)
 	}
-	return rawURL, nil
+	return u.String(), nil
 }
 
-// httpGet 简单拉取（限时 20s、限 4MB）。
-func httpGet(u string) ([]byte, error) {
-	cl := &http.Client{Timeout: 20 * time.Second}
-	resp, err := cl.Get(u)
+// parseImportURL 把用户贴进来的配置地址收成安全的绝对 URL。
+//
+// 现场用法是运维手工贴内网地址（10/8、172.16/12、192.168/16 必须放行），
+// 要挡的是解析把戏：带 userinfo 的 https://可信名@169.254.169.254/…
+// 以及本机 / 链路本地 / 0.0.0.0/8。跨主机重定向在 CheckRedirect 里拦。
+func parseImportURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("请填配置地址（http/https）")
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
+		return nil, fmt.Errorf("地址解析失败：%w", err)
+	}
+	if err := checkImportURL(u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// checkImportURL 协议 / userinfo / 主机：与重定向每一跳共用。
+func checkImportURL(u *url.URL) error {
+	if err := checkImportURLShape(u); err != nil {
+		return err
+	}
+	return checkImportHost(u.Hostname())
+}
+
+// checkImportURLShape 只看写法（不解析 DNS），方便重定向先判跨主机再决定要不要查主机。
+func checkImportURLShape(u *url.URL) error {
+	if u == nil {
+		return fmt.Errorf("地址解析失败")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("只支持 http/https 地址")
+	}
+	if u.User != nil {
+		return fmt.Errorf("地址里不能带用户名或口令")
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("地址缺少主机名")
+	}
+	return nil
+}
+
+// checkImportHost 主机名：纯 IP 直接判；否则解析后每一条地址都过 classifyImportIP。
+func checkImportHost(host string) error {
+	if host == "" {
+		return fmt.Errorf("地址缺少主机名")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return classifyImportIP(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("解析主机名失败：%w", err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("主机名解析不到地址")
+	}
+	for _, ip := range ips {
+		if err := classifyImportIP(ip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// classifyImportIP 判定这个 IP 能不能当配置下载目标。纯函数，方便单测，避免真去连 10.x。
+//
+// 拒：环回、链路本地（169.254/16、IPv6 fe80::/10）、0.0.0.0/8。
+// 放行：RFC1918 与其它地址。
+func classifyImportIP(ip net.IP) error {
+	if ip == nil {
+		return fmt.Errorf("地址无效")
+	}
+	if ip.IsLoopback() {
+		return fmt.Errorf("不能从本机地址下载配置")
+	}
+	if ip.IsLinkLocalUnicast() {
+		return fmt.Errorf("不能从链路本地地址下载配置")
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return fmt.Errorf("不能从这个地址下载配置")
+	}
+	if ip.To4() == nil && ip.IsUnspecified() {
+		return fmt.Errorf("不能从这个地址下载配置")
+	}
+	return nil
+}
+
+// checkImportRedirect 每一跳重跑同一套地址检查，并禁止跨主机跳转
+// （避免「公网短链 → 本机 / 云 metadata」）。
+func checkImportRedirect(req *http.Request, via []*http.Request) error {
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("重定向地址看不懂")
+	}
+	if len(via) >= 10 {
+		return fmt.Errorf("重定向次数过多")
+	}
+	if err := checkImportURLShape(req.URL); err != nil {
+		return err
+	}
+	if len(via) > 0 {
+		prev := via[len(via)-1]
+		if prev == nil || prev.URL == nil {
+			return fmt.Errorf("重定向地址看不懂")
+		}
+		if !strings.EqualFold(req.URL.Hostname(), prev.URL.Hostname()) {
+			return fmt.Errorf("不允许跳转到其它主机（%s → %s）", prev.URL.Hostname(), req.URL.Hostname())
+		}
+	}
+	return checkImportHost(req.URL.Hostname())
+}
+
+// httpGet 简单拉取（限时 20s、限 4MB）。先过 parseImportURL，重定向走 checkImportRedirect。
+func httpGet(raw string) ([]byte, error) {
+	u, err := parseImportURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	cl := &http.Client{
+		Timeout:       20 * time.Second,
+		CheckRedirect: checkImportRedirect,
+	}
+	resp, err := cl.Get(u.String())
+	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return nil, fmt.Errorf("下载失败：%w", err)
 	}
 	defer resp.Body.Close()
